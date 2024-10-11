@@ -53,7 +53,9 @@ from pygac.clock_offsets_converter import get_offsets
 from pygac.correct_tsm_issue import TSM_AFFECTED_INTERVALS_POD, get_tsm_idx
 from pygac.reader import DecodingError, NoTLEData, Reader, ReaderError
 from pygac.slerp import slerp
-from pygac.utils import file_opener
+from pygac.utils import file_opener, allan_deviation
+
+import matplotlib.pyplot as plt
 
 LOG = logging.getLogger(__name__)
 
@@ -549,13 +551,37 @@ class PODReader(Reader):
         lons = self.scans["earth_location"]["lons"] / np.float32(128.0)
         return lons, lats
 
+    def _get_bad_space_counts(self,sp_data,ict_data):
+        """Find bad space count data (space count data is voltage clamped so
+        should have very close to the same value close to 950 - 960
+        Written by J.Mittaz / University of Reading 6 Oct 2024"""
+
+        #
+        # Use robust estimators to get thresholds for space counts
+        # Use 4 sigma threshold from median
+        #
+        quantile = np.quantile(sp_data.flatten(),[0.25,0.75])
+        if quantile[0] == quantile[1]:
+            quantile[1] = quantile[1]+0.5
+        sp_thresh = np.median(sp_data.flatten())-\
+            4*(quantile[1]-quantile[0])/1.349
+        sp_bad_data = (sp_data < sp_thresh)|(ict_data == 0)
+        
+        return sp_bad_data
+        
     def get_telemetry(self):
-        """Get the telemetry.
+        """Get the telemetry. Modified by J.Mittaz / University of Reading
+        to find scanlines with bad space/ict data. Still returns standard
+        pygac mean across all 10 measurements to keep original ptgac 
+        behaviour. Also calculates noise using Allan deviation for 
+        across-track pixels.
 
         Returns:
             prt_counts: np.array
             ict_counts: np.array
             space_counts: np.array
+            bad_scanlines: np.array
+            noise: np.array
 
         """
         number_of_scans = self.scans["telemetry"].shape[0]
@@ -564,23 +590,66 @@ class PODReader(Reader):
         decode_tele[:, 1::3] = (self.scans["telemetry"] >> 10) & 1023
         decode_tele[:, 2::3] = self.scans["telemetry"] & 1023
 
+        #
+        # Get PRT counts
+        #
         prt_counts = np.mean(decode_tele[:, 17:20], axis=1)
 
         # getting ICT counts
-
         ict_counts = np.zeros((int(number_of_scans), 3))
         ict_counts[:, 0] = np.mean(decode_tele[:, 22:50:3], axis=1)
         ict_counts[:, 1] = np.mean(decode_tele[:, 23:51:3], axis=1)
         ict_counts[:, 2] = np.mean(decode_tele[:, 24:52:3], axis=1)
 
         # getting space counts
-
         space_counts = np.zeros((int(number_of_scans), 3))
         space_counts[:, 0] = np.mean(decode_tele[:, 54:100:5], axis=1)
         space_counts[:, 1] = np.mean(decode_tele[:, 55:101:5], axis=1)
         space_counts[:, 2] = np.mean(decode_tele[:, 56:102:5], axis=1)
 
-        return prt_counts, ict_counts, space_counts
+        #
+        # Now work out bad scanlines from space counts/ict counts
+        # Code for uncertainty calculations
+        #
+        # getting space counts and ict counts filtering out bad values
+        # Index 0 - 3.7mu
+        sp_data = decode_tele[:, 54:100:5]
+        ict_data = decode_tele[:, 22:50:3]
+        #
+        # Get flags denoting problematic space counts
+        #        
+        bad_data_1 = self._get_bad_space_counts(sp_data,ict_data)
+        
+        # Index 1 - 11mu
+        sp_data = decode_tele[:, 55:101:5]
+        ict_data = decode_tele[:, 23:51:3]
+        bad_data_2 = self._get_bad_space_counts(sp_data,ict_data)
+        
+        # Index 2 - 12mu
+        sp_data = decode_tele[:, 56:102:5]
+        ict_data = decode_tele[:, 24:52:3]
+        bad_data_3 = self._get_bad_space_counts(sp_data,ict_data)
+
+        #
+        # Map to bad scanlines
+        #
+        bad_scans = np.zeros(space_counts.shape[0],dtype=np.int8)
+        for i in range(len(bad_scans)):
+            if np.any(bad_data_1[i,:]) or np.any(bad_data_2[i,:]) or \
+               np.any(bad_data_3[i,:]):
+                bad_scans[i] = 1
+
+        #
+        # Get noise using Allan deviation for each channel from space counts
+        # filter on bad_scans
+        #
+        noise1 = allan_deviation(decode_tele[:, 54:100:5],bad_scan=bad_scans)
+        noise2 = allan_deviation(decode_tele[:, 55:101:5],bad_scan=bad_scans)
+        noise3 = allan_deviation(decode_tele[:, 56:102:5],bad_scan=bad_scans)
+
+        noise = np.array([noise1,noise2,noise3])
+        
+        return prt_counts, ict_counts, space_counts, bad_scans, noise
 
     @staticmethod
     def _get_ir_channels_to_calibrate():

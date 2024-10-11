@@ -541,6 +541,16 @@ class Reader(ABC):
         return self.create_counts_dataset()
 
     def create_counts_dataset(self):
+        """Created output xarray containing counts and information relevant
+        to calibration. Outputs:
+            channels: Earth scene counts
+            prt_counts: Counts from PRTs on ICT
+            ict_counts: Counts from observed ICT
+            space_counts: Counts from space observation
+            bad_space_scans: Scanlines with suspect space view information
+            noise: Noise estimates in counts
+            Longitude/latitude: pixel position
+        bad_space_view and noise added by J.Mittaz, UoR"""
         head = dict(zip(self.head.dtype.names, self.head.item()))
         scans = self.scans
 
@@ -564,18 +574,28 @@ class Reader(ABC):
                                             columns=columns,
                                             times=("scan_line_index", times)))
 
-        prt, ict, space = self._get_telemetry_dataarrays(line_numbers, ir_channel_names)
+        #
+        # Added bad_space_scans and noise to outputs
+        # J.Mittaz University of Reading
+        #
+        prt, ict, space, bad_space_scans, noise = \
+            self._get_telemetry_dataarrays(line_numbers, ir_channel_names)
 
         longitudes, latitudes = self._get_lonlat_dataarrays(line_numbers, columns)
-
         if self.interpolate_coords:
             channels = channels.assign_coords(longitude=(("scan_line_index", "columns"),
                                                         longitudes.reindex_like(channels).data),
                                             latitude=(("scan_line_index", "columns"),
                                                         latitudes.reindex_like(channels).data))
 
-        ds = xr.Dataset(dict(channels=channels, prt_counts=prt, ict_counts=ict, space_counts=space,
-                             longitude=longitudes, latitude=latitudes),
+        #
+        # Added space_views and noise entries
+        #
+        ds = xr.Dataset(dict(channels=channels, prt_counts=prt, \
+                             ict_counts=ict, space_counts=space,\
+                             bad_space_scans=bad_space_scans,\
+                             noise=noise,\
+                             longitude=longitudes, latitude=latitudes),\
                              attrs=head)
 
         ds.attrs["spacecraft_name"] = self.spacecraft_name
@@ -605,15 +625,25 @@ class Reader(ABC):
         return longitudes,latitudes
 
     def _get_telemetry_dataarrays(self, line_numbers, ir_channel_names):
-        prt, ict, space = self.get_telemetry()
+        """Get data from lower telemetry including bad_scans and noise added
+        by J.Mittaz UoR"""
+        prt, ict, space, bad_scans, noise = self.get_telemetry()
 
         prt = xr.DataArray(prt, dims=["scan_line_index"], coords=dict(scan_line_index=line_numbers))
         ict = xr.DataArray(ict, dims=["scan_line_index", "ir_channel_name"],
                            coords=dict(ir_channel_name=ir_channel_names, scan_line_index=line_numbers))
         space = xr.DataArray(space, dims=["scan_line_index", "ir_channel_name"],
                              coords=dict(ir_channel_name=ir_channel_names, scan_line_index=line_numbers))
-
-        return prt,ict,space
+        #
+        # New entries for calibration uncertainty work
+        #
+        bad_scans = xr.DataArray(bad_scans, dims=["scan_line_index"],
+                           coords=dict(scan_line_index=line_numbers))
+        
+        noise = xr.DataArray(noise, dims=["ir_channel_name"],
+                             coords=dict(ir_channel_name=ir_channel_names))
+        
+        return prt,ict,space,bad_scans,noise
 
     def get_calibrated_channels(self):
         """Calibrate and return the channels."""
