@@ -563,9 +563,8 @@ class PODReader(Reader):
         quantile = np.quantile(sp_data.flatten(),[0.25,0.75])
         if quantile[0] == quantile[1]:
             quantile[1] = quantile[1]+0.5
-        sp_thresh = np.median(sp_data.flatten())-\
-            4*(quantile[1]-quantile[0])/1.349
-        sp_bad_data = (sp_data < sp_thresh)|(ict_data == 0)
+        std = (quantile[1]-quantile[0])/1.349
+        sp_bad_data = (np.abs(sp_data - np.median(sp_data.flatten()))/std > 4.)|(ict_data == 0)
         
         return sp_bad_data
         
@@ -582,6 +581,7 @@ class PODReader(Reader):
             space_counts: np.array
             bad_scanlines: np.array
             noise: np.array
+            ict_noise: np.array
 
         """
         number_of_scans = self.scans["telemetry"].shape[0]
@@ -643,13 +643,23 @@ class PODReader(Reader):
         # Get noise using Allan deviation for each channel from space counts
         # filter on bad_scans
         #
+        # Space view
+        #
         noise1 = allan_deviation(decode_tele[:, 54:100:5],bad_scan=bad_scans)
         noise2 = allan_deviation(decode_tele[:, 55:101:5],bad_scan=bad_scans)
         noise3 = allan_deviation(decode_tele[:, 56:102:5],bad_scan=bad_scans)
+        #
+        # ICT view
+        #
+        ict_noise1 = allan_deviation(decode_tele[:, 22:50:3],bad_scan=bad_scans)
+        ict_noise2 = allan_deviation(decode_tele[:, 23:51:3],bad_scan=bad_scans)
+        ict_noise3 = allan_deviation(decode_tele[:, 24:52:3],bad_scan=bad_scans)
 
         noise = np.array([noise1,noise2,noise3])
+        ict_noise = np.array([ict_noise1,ict_noise2,ict_noise3])
         
-        return prt_counts, ict_counts, space_counts, bad_scans, noise
+        return prt_counts, ict_counts, space_counts, bad_scans, noise, \
+            ict_noise
 
     @staticmethod
     def _get_ir_channels_to_calibrate():
