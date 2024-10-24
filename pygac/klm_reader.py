@@ -47,7 +47,7 @@ import numpy as np
 
 from pygac.correct_tsm_issue import TSM_AFFECTED_INTERVALS_KLM, get_tsm_idx
 from pygac.reader import Reader, ReaderError
-from pygac.utils import file_opener, allan_deviation
+from pygac.utils import file_opener
 
 LOG = logging.getLogger(__name__)
 
@@ -733,36 +733,16 @@ class KLMReader(Reader):
         if platform_id not in allowed_ids:
             raise ReaderError('Improper platform id "%s"!' % platform_id)
 
-    def _get_bad_space_counts(self,sp_data,ict_data):
-        """Find bad space count data (space count data is voltage clamped so
-        should have very close to the same value close to 950 - 960
-        Written by J.Mittaz / University of Reading 6 Oct 2024"""
-
-        #
-        # Use robust estimators to get thresholds for space counts
-        # Use 4 sigma threshold from median
-        #
-        quantile = np.quantile(sp_data.flatten(),[0.25,0.75])
-        if quantile[0] == quantile[1]:
-            quantile[1] = quantile[1]+0.5
-        std = (quantile[1]-quantile[0])/1.349
-        sp_bad_data = (np.abs(sp_data - np.median(sp_data.flatten()))/std > 4.)|(ict_data == 0)
-
-        return sp_bad_data
-        
     def get_telemetry(self):
         """Get the telemetry. Modified by J.Mittaz / University of Reading
-        to find scanlines with bad space/ict data. Still returns standard
-        pygac mean across 10 measurements. Also returns noise estimates using
-        the Allan deviation.
+        to return complete (scanline x 10 views) space/ict views.
 
         Returns:
             prt_counts: np.array
             ict_counts: np.array
             space_counts: np.array
-            bad_scanlines: np.array
-            noise: np.array
-            ict_noise: np.array
+            total_ict_counts: np.array
+            total_space_counts: np.array
 
         """
         #
@@ -784,65 +764,21 @@ class KLMReader(Reader):
         space_counts[:, 1] = np.mean(self.scans["space_data"][:, 3::5], axis=1)
         space_counts[:, 2] = np.mean(self.scans["space_data"][:, 4::5], axis=1)
 
-        #
-        # Now work out bad scanlines from space counts/ict counts
-        #
-        # getting space counts and ict counts filtering out bad values
-        #
-        # Index 0 - 3.7mu
-        #
-        # Get flags denoting problematic space counts
-        #        
-        bad_data_1 = \
-            self._get_bad_space_counts(self.scans["space_data"][:, 2::5],\
-                                       self.scans["back_scan"][:, 0::3])
-        
-        # Index 1 - 11mu
-        bad_data_2 = \
-            self._get_bad_space_counts(self.scans["space_data"][:, 3::5],\
-                                       self.scans["back_scan"][:, 1::3])
-        
-        # Index 2 - 12mu
-        bad_data_3 = \
-            self._get_bad_space_counts(self.scans["space_data"][:, 4::5],\
-                                       self.scans["back_scan"][:, 2::3])
-
-        #
-        # Map to bad scanlines
-        #
-        bad_scans = np.zeros(space_counts.shape[0],dtype=np.int8)
-        for i in range(len(bad_scans)):
-            if np.any(bad_data_1[i,:]) or np.any(bad_data_2[i,:]) or \
-               np.any(bad_data_3[i,:]):
-                bad_scans[i] = 1
-
-        #
-        # Get noise using Allan deviation for each channel from space counts
-        # Filtering bad scanlines
-        #
-        # Space view
-        #
-        noise1 = allan_deviation(self.scans["space_data"][:, 2::5],\
-                                 bad_scan=bad_scans)
-        noise2 = allan_deviation(self.scans["space_data"][:, 3::5],\
-                                 bad_scan=bad_scans)
-        noise3 = allan_deviation(self.scans["space_data"][:, 4::5],\
-                                 bad_scan=bad_scans)
-        #
-        # ICT view
-        #
-        ict_noise1 = allan_deviation(self.scans["back_scan"][:, 0::3],\
-                                     bad_scan=bad_scans)
-        ict_noise2 = allan_deviation(self.scans["back_scan"][:, 1::3],\
-                                     bad_scan=bad_scans)
-        ict_noise3 = allan_deviation(self.scans["back_scan"][:, 2::3],\
-                                     bad_scan=bad_scans)
-
-        noise = np.array([noise1,noise2,noise3])
-        ict_noise = np.array([ict_noise1,ict_noise2,ict_noise3])
+        # Make total arrays
+        total_space_counts = np.zeros((space_counts.shape[0],10,3),\
+                                      dtype=space_counts.dtype)
+        total_space_counts[:,:,0] = self.scans["space_data"][:, 2::5]
+        total_space_counts[:,:,1] = self.scans["space_data"][:, 3::5]
+        total_space_counts[:,:,2] = self.scans["space_data"][:, 4::5]
                 
-        return prt_counts, ict_counts, space_counts, bad_scans, noise, \
-            ict_noise
+        total_ict_counts = np.zeros((ict_counts.shape[0],10,3),\
+                                    dtype=space_counts.dtype)
+        total_ict_counts[:,:,0] = self.scans["back_scan"][:, 0::3]
+        total_ict_counts[:,:,1] = self.scans["back_scan"][:, 1::3]
+        total_ict_counts[:,:,2] = self.scans["back_scan"][:, 2::3]
+                
+        return prt_counts, ict_counts, space_counts, total_space_counts,\
+            total_ict_counts
 
     def _get_lonlat_from_file(self):
         """Get the longitudes and latitudes."""

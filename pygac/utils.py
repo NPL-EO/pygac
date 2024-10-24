@@ -341,7 +341,10 @@ def allan_deviation(space,bad_scan=None):
     # Get good scanlines if filter present
     #
     if bad_scan is not None:
-        newsp = space[~bad_scan,:]
+        gd = (bad_scan == 0)
+        newsp = space[bad_scan,:]
+    else:
+        newsp = space
 
     #
     # Allan deviation is sqrt of allan variance which is

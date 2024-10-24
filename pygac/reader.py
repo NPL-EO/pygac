@@ -549,6 +549,7 @@ class Reader(ABC):
             space_counts: Counts from space observation
             bad_space_scans: Scanlines with suspect space view information
             noise: Noise estimates in counts
+            ict_noise: ICT noise estimates in counts
             Longitude/latitude: pixel position
         bad_space_view and noise added by J.Mittaz, UoR"""
         head = dict(zip(self.head.dtype.names, self.head.item()))
@@ -578,8 +579,8 @@ class Reader(ABC):
         # Added bad_space_scans and noise to outputs
         # J.Mittaz University of Reading
         #
-        prt, ict, space, bad_space_scans, noise = \
-            self._get_telemetry_dataarrays(line_numbers, ir_channel_names)
+        prt, ict, space, total_ict, total_space \
+            = self._get_telemetry_dataarrays(line_numbers, ir_channel_names)
 
         longitudes, latitudes = self._get_lonlat_dataarrays(line_numbers, columns)
         if self.interpolate_coords:
@@ -593,8 +594,8 @@ class Reader(ABC):
         #
         ds = xr.Dataset(dict(channels=channels, prt_counts=prt, \
                              ict_counts=ict, space_counts=space,\
-                             bad_space_scans=bad_space_scans,\
-                             noise=noise,\
+                             total_ict_counts=total_ict,\
+                             total_space_counts=total_space,\
                              longitude=longitudes, latitude=latitudes),\
                              attrs=head)
 
@@ -627,7 +628,7 @@ class Reader(ABC):
     def _get_telemetry_dataarrays(self, line_numbers, ir_channel_names):
         """Get data from lower telemetry including bad_scans and noise added
         by J.Mittaz UoR"""
-        prt, ict, space, bad_scans, noise = self.get_telemetry()
+        prt, ict, space, total_space, total_ict = self.get_telemetry()
 
         prt = xr.DataArray(prt, dims=["scan_line_index"], coords=dict(scan_line_index=line_numbers))
         ict = xr.DataArray(ict, dims=["scan_line_index", "ir_channel_name"],
@@ -637,13 +638,15 @@ class Reader(ABC):
         #
         # New entries for calibration uncertainty work
         #
-        bad_scans = xr.DataArray(bad_scans, dims=["scan_line_index"],
-                           coords=dict(scan_line_index=line_numbers))
+        pixel_index = np.arange(10,dtype=np.int8)
+        total_ict = xr.DataArray(total_ict, \
+                                 dims=["scan_line_index", "pixel_index", "ir_channel_name"],\
+                                 coords=dict(ir_channel_name=ir_channel_names, scan_line_index=line_numbers))
+        total_space = xr.DataArray(total_space, \
+                                 dims=["scan_line_index", "pixel_index", "ir_channel_name"],\
+                                   coords=dict(ir_channel_name=ir_channel_names, scan_line_index=line_numbers,pixel_index=pixel_index))
         
-        noise = xr.DataArray(noise, dims=["ir_channel_name"],
-                             coords=dict(ir_channel_name=ir_channel_names))
-        
-        return prt,ict,space,bad_scans,noise
+        return prt,ict,space,total_ict,total_space
 
     def get_calibrated_channels(self):
         """Calibrate and return the channels."""
