@@ -97,7 +97,7 @@ def get_bad_space_counts(sp_data,ict_data):
     sp_bad_data[:,:] = True
     gd = np.isfinite(sp_data)
     sp_bad_data[gd] = ~((np.abs(sp_data[gd] - np.median(sp_data[gd].flatten()))/\
-                         std < 4.)&(ict_data[gd] > 0))
+                         std < 5.)&(ict_data[gd] > 0))
 
     return sp_bad_data
 
@@ -764,12 +764,12 @@ def ir_uncertainty(ds,mask,plot=False):
             T,bt_sys_12[i,:] = convT3.rad_to_t_uncert(rad_12,rad_sys_12)
 
         #
-        # Add 0.5K for measurement equation uncertainty
+        # Add 0.5/sqrt(3.)K for measurement equation uncertainty
         #
-        bt_sys_37[i,:] = np.sqrt(bt_sys_37[i,:]**2+0.5**2)
-        bt_sys_11[i,:] = np.sqrt(bt_sys_11[i,:]**2+0.5**2)
+        bt_sys_37[i,:] = np.sqrt(bt_sys_37[i,:]**2+0.5**2/3.)
+        bt_sys_11[i,:] = np.sqrt(bt_sys_11[i,:]**2+0.5**2/3.)
         if twelve_micron:
-            bt_sys_12[i,:] = np.sqrt(bt_sys_12[i,:]**2+0.5**2)
+            bt_sys_12[i,:] = np.sqrt(bt_sys_12[i,:]**2+0.5**2/3.)
 
     if plot:
         if twelve_micron:
