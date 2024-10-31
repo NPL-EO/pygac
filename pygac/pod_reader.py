@@ -587,10 +587,7 @@ class PODReader(Reader):
         space_counts[:, 2] = np.mean(decode_tele[:, 56:102:5], axis=1)
 
         #
-        # Now work out bad scanlines from space counts/ict counts
-        # Code for uncertainty calculations
-        #
-        # getting space counts and ict counts filtering out bad values
+        # getting space counts
         # Index 0 - 3.7mu
         sp_data_0 = decode_tele[:, 54:100:5]
         ict_data_0 = decode_tele[:, 22:50:3]
