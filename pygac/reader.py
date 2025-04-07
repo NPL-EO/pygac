@@ -551,7 +551,7 @@ class Reader(ABC):
             noise: Noise estimates in counts
             ict_noise: ICT noise estimates in counts
             Longitude/latitude: pixel position
-        bad_space_view and noise added by J.Mittaz, UoR"""
+        bad_space_view and noise and angles added by J.Mittaz, UoR"""
         head = dict(zip(self.head.dtype.names, self.head.item()))
         scans = self.scans
 
@@ -576,13 +576,22 @@ class Reader(ABC):
                                             times=("scan_line_index", times)))
 
         #
-        # Added bad_space_scans and noise to outputs
+        # Added total (10 per scan line) arrays
         # J.Mittaz University of Reading
         #
         prt, ict, space, total_ict, total_space \
             = self._get_telemetry_dataarrays(line_numbers, ir_channel_names)
 
         longitudes, latitudes = self._get_lonlat_dataarrays(line_numbers, columns)
+        #
+        # Get angles - need sun_zen for solar contamination in
+        # calibration routines
+        #
+        sat_azi, sat_zen, sun_azi, sun_zen, rel_azi = self.get_angles()
+        sun_zen = xr.DataArray(sun_zen, \
+                                 dims=["scan_line_index", "columns"],\
+                                   coords=dict(scan_line_index=line_numbers,columns=columns))
+        
         if self.interpolate_coords:
             channels = channels.assign_coords(longitude=(("scan_line_index", "columns"),
                                                         longitudes.reindex_like(channels).data),
@@ -596,7 +605,8 @@ class Reader(ABC):
                              ict_counts=ict, space_counts=space,\
                              total_ict_counts=total_ict,\
                              total_space_counts=total_space,\
-                             longitude=longitudes, latitude=latitudes),\
+                             longitude=longitudes, latitude=latitudes,\
+                             sun_zen=sun_zen),\
                              attrs=head)
 
         ds.attrs["spacecraft_name"] = self.spacecraft_name
