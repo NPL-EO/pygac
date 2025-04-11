@@ -191,7 +191,8 @@ def get_noise(total_space,total_ict,window,twelve_micron):
         av_ict_noise1,av_ict_noise2,av_ict_noise3,bad_scans
 
 def smooth_data(y,length):
-
+    """Smooth data over given length"""
+    
     outy = np.zeros(len(y),dtype=y.dtype)
     leny = len(y)-1
     for i in range(leny+1):
@@ -285,7 +286,7 @@ def find_solar(ds,mask,convT=None,outgain=False):
     # Get parameters for kernals/uncertainties
     #
     window, prt_bias, prt_sys, prt_threshold, ict_threshold, \
-        space_threshold = get_parameter_thresholds()
+        space_threshold = get_uncert_parameter_thresholds()
     if ds['channels'].values.shape[1] == 409:
         gacdata = True
         scale = 1
@@ -687,7 +688,7 @@ def get_sys(channel,uICT,Tict,CS,CE,CICT,NS,\
 
 def get_vars(ds,channel,convT,wlength,prt_threshold,ict_threshold,\
              space_threshold,gac,cal,mask,out_prt=False,out_solza=False):
-    """Get variables from xarray"""
+    """Get variables from xarray including smoothing and interpolation"""
 
     space = ds['space_counts'].values[:,channel]
     prt = ds["prt_counts"].values[:]
@@ -902,9 +903,12 @@ def get_gainval(time,avhrr,ict1,ict2,ict3,ict4,CS,CICT,CE,NS,bad_scan,convT,\
     #
     coef_file = files("pygac") / "data/{0}_uncert.nc".format(avhrr)
     with xr.open_dataset(coef_file) as d:
-        intime = d["time"].values[:]
-        ingain = d["max_gain"].values[:]
+        intime = d["time_gain"].values[:]
+        ingain = d["gain"].values[:]
 
+    if time > intime[-1] and not calculate:
+        raise Exception('ERROR: file time > last time with max gain values (HRPR/LAC)')
+        
     timediff = (intime-time)/np.timedelta64(1,'s')
     timediff = np.abs(timediff)
     timediff_min = timediff.min()
@@ -915,14 +919,24 @@ def get_gainval(time,avhrr,ict1,ict2,ict3,ict4,CS,CICT,CE,NS,bad_scan,convT,\
     # Check Earth counts in window for 3.7 micron as if nan then in S3/3B
     #
     
-    if timediff_min < 86400. and not calculate: 
+    if not calculate:
+        #
+        # HRPT/LAC
+        #
         pos = np.nonzero(timediff == timediff_min)[0][0]
-        return ingain[pos]
+        return ingain[pos]        
+    elif timediff_min < 86400.:
+        #
+        # Take precalc value from file
+        #
+        pos = np.nonzero(timediff == timediff_min)[0][0]
+        return ingain[pos]        
     else:
         #
         # No nearby gain estimate or force calculate so calculate
         # from data using min std of prts
         #
+        gd = (bad_scan == 0)
         prt1 = prt1[gd]
         prt2 = prt2[gd]
         prt3 = prt3[gd]
@@ -954,21 +968,67 @@ def get_pixel(Lict,CS,CE,CICT,NS,c0,c1,c2):
     else:
         return Llin
 
-def get_parameter_thresholds():    
+def get_uncert_parameter_thresholds(vischans=False):
+    """Return required constants for IR and visible uncertainty cases. Single
+    point so any changes will be correctly applied across both"""
     #
     # Define averaging kernel based on value in noaa.py
     # Also set PRT uncertainty components and thresholds
     #
-    window = 51
-    prt_bias = 0.01
-    prt_sys = 0.1
-    prt_threshold = 50
-    ict_threshold = 100
-    space_threshold = 100
+    if vischans:
+        window = 51
+        solar_contam_threshold = 0.05
+        solar_contam_sza_threshold = 102.
+        return window,solar_contam_threshold,solar_contam_sza_threshold
+    else:
+        window = 51
+        prt_bias = 0.01
+        prt_sys = 0.1
+        prt_threshold = 50
+        ict_threshold = 100
+        space_threshold = 100
 
-    return window, prt_bias, prt_sys, prt_threshold, ict_threshold, \
-        space_threshold
+        return window, prt_bias, prt_sys, prt_threshold, ict_threshold, \
+            space_threshold
+
+def get_solar_from_file(avhrr_name,ds):
+    """Read in possible solar contamination times from uncertainty files.
+    Only used for LAC/HRPT data where there is not enough data to detect
+    possible solar contamination so GAC estimates are used"""
+
+    #
+    # Get times in seconds from
+    #
+    time = (ds['times'].values[:] - \
+            np.datetime64('1970-01-01T00:00:00Z'))/\
+            np.timedelta64(1,'s')
     
+    #
+    # Read file
+    #
+    coef_file = files("pygac") / "data/{0}_uncert.nc".format(avhrr_name)
+    with xr.open_dataset(coef_file,decode_times=False) as d:
+        solar_start_time = d["gain_solar_start"].values[:]
+        solar_stop_time = d["gain_solar_stop"].values[:]
+
+    #
+    # Match to times in file
+    #
+    min_solar = -1
+    max_solar = -1
+    for i in range(len(solar_start_time)):
+        gd = (time >= solar_start_time[i])&(time <= solar_stop_time[i])
+        if np.sum(gd) > 0:
+            index = np.arange(len(time)).astype(dtype=np.int32)
+            index = index[gd]
+            min_solar = index[0]
+            max_solar = index[-1]
+
+    #
+    # Return solar location if available
+    #
+    return min_solar, max_solar
+
 def ir_uncertainty(ds,mask,plot=True):
     """Create the uncertainty components for the IR channels. These include
     
@@ -993,7 +1053,7 @@ def ir_uncertainty(ds,mask,plot=True):
     # Get parameters for kernals/uncertainties
     #
     window, prt_bias, prt_sys, prt_threshold, ict_threshold, \
-        space_threshold = get_parameter_thresholds()
+        space_threshold = get_uncert_parameter_thresholds()
     
     if ds['channels'].values.shape[1] == 409:
         gacdata = True
@@ -1098,7 +1158,7 @@ def ir_uncertainty(ds,mask,plot=True):
     if plot:
         plt.tight_layout()
 
-    solar_flag = np.zeros(CE_2.shape,dtype=np.uint8)
+    solar_flag = np.zeros(CE_2.shape[0],dtype=np.uint8)
     if gacdata:
         #
         # See if solar contamination present
@@ -1116,22 +1176,25 @@ def ir_uncertainty(ds,mask,plot=True):
         #
         # Find if stored solar contamination is present
         #
-        min_solar, max_solar = get_solar_from_file(time)
+        min_solar, max_solar = get_solar_from_file(avhrr_name,ds)
     #
     # Set solar flag
     #
     if min_solar >= 0 and max_solar >= 0:
-        solar_flag[min:solar:max_solar+1] = 1
+        solar_flag[min_solar:max_solar+1] = 1
         
     #
     # Systematic components - uICT from gain variation in 3.7mu channel
     #
     gd = np.isfinite(ds['times'].values)
     time = ds['times'].values[gd][0]
+    #
+    # Only redo calculation if gac data
+    #
     gain_37 = get_gainval(time,avhrr_name,ict1,ict2,ict3,ict4,CS_1,CICT_1,\
-                          CE_1,0.,bad_scan,convT1,window)
+                          CE_1,0.,bad_scan,convT1,window,calculate=gacdata)
     uICT = get_uICT(gain_37,CS_1,CICT_1,Tict,0.,convT1,bad_scan,\
-                    solar_scans,window)
+                    solar_flag,window)
 
     #
     # Loop round scanlines
@@ -1151,6 +1214,11 @@ def ir_uncertainty(ds,mask,plot=True):
     urand_12 = np.zeros(CE_2.shape,dtype=CE_2.dtype)
     if not twelve_micron:
         urand_12[:,:] = np.nan
+    uratio_37 = np.zeros(CE_2.shape,dtype=CE_2.dtype)
+    uratio_11 = np.zeros(CE_2.shape,dtype=CE_2.dtype)
+    uratio_12 = np.zeros(CE_2.shape,dtype=CE_2.dtype)
+    if not twelve_micron:
+        uratio_12[:,:] = np.nan
     for i in range(len(CS_2)):
         #
         # Check for bad scanlines
@@ -1165,6 +1233,7 @@ def ir_uncertainty(ds,mask,plot=True):
             if twelve_micron:
                 bt_sys_12[i,:] = np.nan
             continue
+
         #
         # Get uncertainty in ICT temperature from PRT measurements
         #
@@ -1240,10 +1309,10 @@ def ir_uncertainty(ds,mask,plot=True):
         tot_sys_11 = np.sqrt(bt_sys_11[i,:]**2+0.5**2/3.)
         if twelve_micron:
             tot_sys_12 = np.sqrt(bt_sys_12[i,:]**2+0.5**2/3.)
-        uratio_37[i,:] = by_sys_37[i,:] / tot_sys_37 
-        uratio_11[i,:] = by_sys_11[i,:] / tot_sys_11 
+        uratio_37[i,:] = bt_sys_37[i,:] / tot_sys_37 
+        uratio_11[i,:] = bt_sys_11[i,:] / tot_sys_11 
         if twelve_micron:
-            uratio_12[i,:] = by_sys_12[i,:] / tot_sys_12 
+            uratio_12[i,:] = bt_sys_12[i,:] / tot_sys_12 
         bt_sys_37[i,:] = tot_sys_37
         bt_sys_11[i,:] = tot_sys_11
         if twelve_micron:
@@ -1356,7 +1425,7 @@ def ir_uncertainty(ds,mask,plot=True):
     # Ratio for channel-to-channel covariance as ubyte
     #
     uratio[:,:,0] = (uratio_37*255).astype(dtype=np.uint8)
-    uration[:,:,1] = (uratio_11*255).astype(dtype=np.uint8)
+    uratio[:,:,1] = (uratio_11*255).astype(dtype=np.uint8)
     if twelve_micron:
         uratio[:,:,2] = (uratio_12*255).astype(dtype=np.uint8)
     else:
@@ -1365,9 +1434,9 @@ def ir_uncertainty(ds,mask,plot=True):
     #
     # Flags
     #
-    gd = (bad_scans == 1)
+    gd = (bad_scan == 1)
     uflags[gd] = 1
-    gd = (solar_flags == 1)
+    gd = (solar_flag == 1)
     uflags[gd] = (uflags[gd]|2)
 
     time = (ds["times"].values - np.datetime64("1970-01-01 00:00:00"))/\
