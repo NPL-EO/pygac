@@ -1011,6 +1011,13 @@ def get_solar_from_file(avhrr_name,ds):
         solar_start_time = d["gain_solar_start"].values[:]
         solar_stop_time = d["gain_solar_stop"].values[:]
 
+    gd = np.isfinite(solar_start_time)&np.isfinite(solar_stop_time)
+    solar_start_time = solar_start_time[gd]
+    solar_stop_time = solar_stop_time[gd]
+    #
+    # Only use good data
+    #
+    gd = np.isfinite(solar_start_time)
     #
     # Match to times in file
     #
